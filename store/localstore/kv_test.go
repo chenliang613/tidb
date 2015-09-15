@@ -76,12 +76,12 @@ func mustDel(c *C, txn kv.Transaction) {
 }
 
 func encodeInt(n int) []byte {
-	return []byte(fmt.Sprintf("%10d", n))
+	return []byte(fmt.Sprintf("%010d", n))
 }
 
 func decodeInt(s []byte) int {
 	var n int
-	fmt.Sscanf(string(s), "%10d", &n)
+	fmt.Sscanf(string(s), "%010d", &n)
 	return n
 }
 
