@@ -15,23 +15,16 @@ type testMvccSuite struct {
 	s kv.Storage
 }
 
-func (s *testMvccSuite) SetUpSuite(c *C) {
+func createMemStore() kv.Storage {
 	path := "memory:"
 	d := Driver{
 		goleveldb.MemoryDriver{},
 	}
 	store, err := d.Open(path)
-	c.Assert(err, IsNil)
-	s.s = store
-
-	// must in cache
-	cacheS, _ := d.Open(path)
-	c.Assert(cacheS, Equals, store)
-}
-
-func (s *testMvccSuite) TearDownSuite(c *C) {
-	err := s.s.Close()
-	c.Assert(err, IsNil)
+	if err != nil {
+		panic(err)
+	}
+	return store
 }
 
 func (t *testMvccSuite) TestMvccEncode(c *C) {
@@ -58,7 +51,10 @@ func (t *testMvccSuite) scanRawEngine(c *C, f func([]byte, []byte)) {
 	}
 }
 
-func (t *testMvccSuite) TestMvccPutAndDel(c *C) {
+func (t *testMvccSuite) SetUpTest(c *C) {
+	// create new store
+	t.s = createMemStore()
+	// insert test data
 	txn, err := t.s.Begin()
 	c.Assert(err, IsNil)
 	for i := 0; i < 5; i++ {
@@ -67,23 +63,18 @@ func (t *testMvccSuite) TestMvccPutAndDel(c *C) {
 		c.Assert(err, IsNil)
 	}
 	txn.Commit()
+}
 
-	t.scanRawEngine(c, func(k, v []byte) {
-		log.Info(k, v)
-	})
-
-	txn, err = t.s.Begin()
+func (t *testMvccSuite) TestMvccPutAndDel(c *C) {
+	txn, err := t.s.Begin()
 	c.Assert(err, IsNil)
+	// remove 0,1,2
 	for i := 0; i < 3; i++ {
 		val := encodeInt(i)
 		err := txn.Delete(val)
 		c.Assert(err, IsNil)
 	}
 	txn.Commit()
-
-	t.scanRawEngine(c, func(k, v []byte) {
-		log.Info(k, v)
-	})
 
 	txn, _ = t.s.Begin()
 	_, err = txn.Get(encodeInt(0))
@@ -93,27 +84,26 @@ func (t *testMvccSuite) TestMvccPutAndDel(c *C) {
 	c.Assert(len(v), Greater, 0)
 	txn.Commit()
 
+	cnt := 0
+	t.scanRawEngine(c, func(k, v []byte) {
+		cnt++
+	})
 	txn, _ = t.s.Begin()
 	txn.Set(encodeInt(0), []byte("v"))
 	v, err = txn.Get(encodeInt(0))
 	txn.Commit()
 
+	cnt1 := 0
 	t.scanRawEngine(c, func(k, v []byte) {
-		log.Info(k, v)
+		cnt1++
 	})
+
+	c.Assert(cnt1, Greater, cnt)
+
 }
 
 func (t *testMvccSuite) TestMvccNext(c *C) {
-	txn, err := t.s.Begin()
-	c.Assert(err, IsNil)
-	for i := 0; i < 5; i++ {
-		val := encodeInt(i)
-		err := txn.Set(val, val)
-		c.Assert(err, IsNil)
-	}
-	txn.Commit()
-
-	txn, _ = t.s.Begin()
+	txn, _ := t.s.Begin()
 	it, err := txn.Seek(encodeInt(2), nil)
 	c.Assert(err, IsNil)
 	c.Assert(it.Valid(), IsTrue)

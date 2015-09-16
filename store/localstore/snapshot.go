@@ -83,9 +83,13 @@ func (s *dbSnapshot) NewIterator(param interface{}) kv.Iterator {
 	}
 	// start with newest version of this key
 	startKey := MvccEncodeVersionKey(k, kv.Version{math.MaxUint64})
-	log.Error(startKey)
 	it := s.Snapshot.NewIterator(startKey)
-	return newDBIter(it)
+	if !it.Next() || !IsValidKey(it.Key()) {
+		return &dbIter{
+			valid: false,
+		}
+	}
+	return newDBIter(s.Snapshot, k)
 }
 
 func (s *dbSnapshot) Release() {
@@ -96,19 +100,52 @@ func (s *dbSnapshot) Release() {
 }
 
 type dbIter struct {
-	engine.Iterator
-	valid bool
+	snapshot engine.Snapshot
+	startKey kv.Key
+	valid    bool
+	k        kv.Key
+	v        []byte
 }
 
-func newDBIter(it engine.Iterator) *dbIter {
-	return &dbIter{
-		Iterator: it,
-		valid:    it.Next(),
+func newDBIter(s engine.Snapshot, startKey kv.Key) *dbIter {
+	it := &dbIter{
+		snapshot: s,
+		startKey: startKey,
+		valid:    true,
 	}
+	it.Next(nil)
+	return it
 }
 
 func (it *dbIter) Next(fn kv.FnKeyCmp) (kv.Iterator, error) {
-	it.valid = it.Iterator.Next()
+	// first key
+	for {
+		endKey := MvccEncodeVersionKey(it.startKey, kv.Version{0})
+		rawIt := it.snapshot.NewIterator(it.startKey)
+		defer rawIt.Release()
+		found := false
+		for rawIt.Next() && IsValidKey(rawIt.Key()) {
+			if kv.EncodedKey(rawIt.Key()).Cmp(endKey) > 0 {
+				break
+			} else {
+				found = true
+				it.k = rawIt.Key()
+				it.v = rawIt.Value()
+			}
+		}
+		if !IsValidKey(rawIt.Key()) {
+			it.valid = false
+			break
+		} else {
+			// TODO buggy.
+			it.startKey = it.startKey.Next()
+			if !found {
+				continue
+			} else {
+				break
+			}
+		}
+	}
 	return it, nil
 }
 
@@ -117,16 +154,12 @@ func (it *dbIter) Valid() bool {
 }
 
 func (it *dbIter) Key() string {
-	return string(it.Iterator.Key())
+	return string(it.k)
 }
 
 func (it *dbIter) Value() []byte {
-	return it.Iterator.Value()
+	return it.v
 }
 
 func (it *dbIter) Close() {
-	if it.Iterator != nil {
-		it.Iterator.Release()
-		it.Iterator = nil
-	}
 }
