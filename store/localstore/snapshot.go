@@ -84,7 +84,7 @@ func (s *dbSnapshot) NewIterator(param interface{}) kv.Iterator {
 		log.Errorf("leveldb iterator parameter error, %+v", param)
 		return nil
 	}
-	return newDBIter(s.Snapshot, k)
+	return newDBIter(s, k)
 }
 
 func (s *dbSnapshot) Release() {
@@ -95,16 +95,16 @@ func (s *dbSnapshot) Release() {
 }
 
 type dbIter struct {
-	snapshot engine.Snapshot
+	s        *dbSnapshot
 	startKey kv.Key
 	valid    bool
 	k        kv.Key
 	v        []byte
 }
 
-func newDBIter(s engine.Snapshot, startKey kv.Key) *dbIter {
+func newDBIter(s *dbSnapshot, startKey kv.Key) *dbIter {
 	it := &dbIter{
-		snapshot: s,
+		s:        s,
 		startKey: startKey,
 		valid:    true,
 	}
@@ -117,7 +117,7 @@ func (it *dbIter) Next(fn kv.FnKeyCmp) (kv.Iterator, error) {
 	// max key
 	encEndKey := codec.EncodeBytes(nil, []byte{0xff, 0xff})
 	for {
-		engineIter := it.snapshot.NewIterator(encKey)
+		engineIter := it.s.Snapshot.NewIterator(encKey)
 		defer engineIter.Release()
 
 		// Check if overflow
@@ -133,22 +133,23 @@ func (it *dbIter) Next(fn kv.FnKeyCmp) (kv.Iterator, error) {
 			return it, nil
 		}
 
+		// Get real key from metaKey
 		key, _, err := MvccDecode(metaKey)
 		if err != nil {
 			return nil, err
 		}
 
-		val, err := it.snapshot.Get(key)
+		// Get meta key.
+		val, err := it.s.Get(key)
 		if err != nil {
 			return nil, err
 		}
 		if val != nil {
 			it.k = key
 			it.v = val
+			it.startKey = key.Next()
 			return it, nil
 		}
-		log.Warn(key)
-
 		encKey = codec.EncodeBytes(nil, key.Next())
 	}
 	return it, nil
