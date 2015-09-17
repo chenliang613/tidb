@@ -9,28 +9,27 @@ import (
 )
 
 var Tombstone = []byte{'\xde', '\xad'}
-var DataPrefix = []byte{'\xda'}
 
 func IsTombstone(v []byte) bool {
 	return bytes.Compare(v, Tombstone) == 0
 }
 
-func IsValidKey(key kv.EncodedKey) bool {
-	return bytes.Compare(key[:1], DataPrefix) == 0
-}
-
 func MvccEncodeVersionKey(key kv.Key, ver kv.Version) kv.EncodedKey {
 	b := codec.EncodeBytes(nil, key)
 	ret := codec.EncodeUintDesc(b, ver.Ver)
-	return append(DataPrefix, ret...)
+	return ret
 }
 
 func MvccDecode(encodedKey kv.EncodedKey) (kv.Key, kv.Version, error) {
 	// Skip DataPrefix
-	remainBytes, key, err := codec.DecodeBytes([]byte(encodedKey[len(DataPrefix):]))
+	remainBytes, key, err := codec.DecodeBytes([]byte(encodedKey))
 	if err != nil {
 		// should never happen
 		return nil, kv.Version{}, errors.Trace(err)
+	}
+	// if it's meta key
+	if len(remainBytes) == 0 {
+		return key, kv.Version{}, nil
 	}
 	var ver uint64
 	remainBytes, ver, err = codec.DecodeUintDesc(remainBytes)

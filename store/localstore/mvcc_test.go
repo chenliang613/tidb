@@ -65,7 +65,24 @@ func (t *testMvccSuite) SetUpTest(c *C) {
 	txn.Commit()
 }
 
+func (t *testMvccSuite) TestMvccGet(c *C) {
+	txn, err := t.s.Begin()
+	c.Assert(err, IsNil)
+	k := encodeInt(1)
+	_, err = txn.Get(k)
+	c.Assert(err, IsNil)
+	// no such key
+	k = encodeInt(1024)
+	_, err = txn.Get(k)
+	c.Assert(err, NotNil)
+	txn.Commit()
+}
+
 func (t *testMvccSuite) TestMvccPutAndDel(c *C) {
+	t.scanRawEngine(c, func(k, v []byte) {
+		log.Info(k, v)
+	})
+
 	txn, err := t.s.Begin()
 	c.Assert(err, IsNil)
 	// remove 0,1,2
@@ -103,6 +120,9 @@ func (t *testMvccSuite) TestMvccPutAndDel(c *C) {
 }
 
 func (t *testMvccSuite) TestMvccNext(c *C) {
+	t.scanRawEngine(c, func(k, v []byte) {
+		log.Warn(k, v)
+	})
 	txn, _ := t.s.Begin()
 	it, err := txn.Seek(encodeInt(2), nil)
 	c.Assert(err, IsNil)

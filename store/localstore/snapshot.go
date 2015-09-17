@@ -14,11 +14,13 @@
 package localstore
 
 import (
+	"bytes"
 	"math"
 
 	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/store/localstore/engine"
+	"github.com/pingcap/tidb/util/codec"
 )
 
 var (
@@ -36,7 +38,7 @@ func (s *dbSnapshot) Get(k kv.Key) ([]byte, error) {
 
 	// get newest version, (0, MaxUint64)
 	// Key arrangement:
-	// Key_MaxVer
+	// Key -> META
 	// ...
 	// Key_ver
 	// Key_ver-1
@@ -44,7 +46,8 @@ func (s *dbSnapshot) Get(k kv.Key) ([]byte, error) {
 	// ...
 	// Key_ver-n
 	// Key_0
-	// NextKey...
+	// NextKey -> META
+	// NextKey_xxx
 	startKey := MvccEncodeVersionKey(k, kv.Version{math.MaxUint64})
 	endKey := MvccEncodeVersionKey(k, kv.Version{0})
 
@@ -54,7 +57,7 @@ func (s *dbSnapshot) Get(k kv.Key) ([]byte, error) {
 
 	var rawKey []byte
 	var v []byte
-	if it.Next() && IsValidKey(it.Key()) {
+	if it.Next() {
 		// If scan exceed this key's all versions
 		// it.Key() > endKey.
 		if kv.EncodedKey(it.Key()).Cmp(endKey) < 0 {
@@ -80,14 +83,6 @@ func (s *dbSnapshot) NewIterator(param interface{}) kv.Iterator {
 	if !ok {
 		log.Errorf("leveldb iterator parameter error, %+v", param)
 		return nil
-	}
-	// start with newest version of this key
-	startKey := MvccEncodeVersionKey(k, kv.Version{math.MaxUint64})
-	it := s.Snapshot.NewIterator(startKey)
-	if !it.Next() || !IsValidKey(it.Key()) {
-		return &dbIter{
-			valid: false,
-		}
 	}
 	return newDBIter(s.Snapshot, k)
 }
@@ -118,33 +113,43 @@ func newDBIter(s engine.Snapshot, startKey kv.Key) *dbIter {
 }
 
 func (it *dbIter) Next(fn kv.FnKeyCmp) (kv.Iterator, error) {
-	// first key
+	encKey := codec.EncodeBytes(nil, it.startKey)
+	// max key
+	encEndKey := codec.EncodeBytes(nil, []byte{0xff, 0xff})
 	for {
-		endKey := MvccEncodeVersionKey(it.startKey, kv.Version{0})
-		rawIt := it.snapshot.NewIterator(it.startKey)
-		defer rawIt.Release()
-		found := false
-		for rawIt.Next() && IsValidKey(rawIt.Key()) {
-			if kv.EncodedKey(rawIt.Key()).Cmp(endKey) > 0 {
-				break
-			} else {
-				found = true
-				it.k = rawIt.Key()
-				it.v = rawIt.Value()
-			}
-		}
-		if !IsValidKey(rawIt.Key()) {
+		engineIter := it.snapshot.NewIterator(encKey)
+		defer engineIter.Release()
+
+		// Check if overflow
+		if !engineIter.Next() {
 			it.valid = false
-			break
-		} else {
-			// TODO buggy.
-			it.startKey = it.startKey.Next()
-			if !found {
-				continue
-			} else {
-				break
-			}
+			return it, nil
 		}
+
+		// Check if overflow
+		metaKey := engineIter.Key()
+		if bytes.Compare(metaKey, encEndKey) >= 0 {
+			it.valid = false
+			return it, nil
+		}
+
+		key, _, err := MvccDecode(metaKey)
+		if err != nil {
+			return nil, err
+		}
+
+		val, err := it.snapshot.Get(key)
+		if err != nil {
+			return nil, err
+		}
+		if val != nil {
+			it.k = key
+			it.v = val
+			return it, nil
+		}
+		log.Warn(key)
+
+		encKey = codec.EncodeBytes(nil, key.Next())
 	}
 	return it, nil
 }

@@ -39,6 +39,10 @@ func (k EncodedKey) Cmp(another EncodedKey) int {
 	return bytes.Compare(k, another)
 }
 
+func (k EncodedKey) Next() EncodedKey {
+	return EncodedKey(bytes.Join([][]byte{k, Key{0}}, nil))
+}
+
 // VersionProvider
 type VersionProvider interface {
 	GetCurrentVer() (Version, error)

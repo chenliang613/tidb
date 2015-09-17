@@ -22,6 +22,7 @@ import (
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/util/codec"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 )
 
@@ -192,6 +193,9 @@ func (txn *dbTxn) doCommit() error {
 	// Check dirty store
 	curVer, _ := globalVerProvider.GetCurrentVer()
 	err := txn.each(func(iter iterator.Iterator) error {
+		metaKey := codec.EncodeBytes(nil, iter.Key())
+		// put dummy meta key
+		b.Put(metaKey, nil)
 		mvccKey := MvccEncodeVersionKey(iter.Key(), curVer)
 		if len(iter.Value()) == 0 { // Deleted marker
 			b.Put(mvccKey, Tombstone)
