@@ -60,6 +60,7 @@ import (
 	/*yy:token "%c"     */	identifier      "identifier"
 	/*yy:token "%d"     */	intLit          "integer literal"
 	/*yy:token "\"%c\"" */	stringLit       "string literal"
+	/*yy:token "%x"     */	hexLit          "hexadecimal literal"
 
 
 	abs		"ABS"
@@ -423,6 +424,7 @@ import (
 	ShowDatabaseNameOpt	"Show tables/columns statement database name option"
 	ShowTableIdentOpt	"Show columns statement table name option"
 	SignedLiteral		"Literal or NumLiteral with sign"
+	SimpleQualifiedIdent	"Qualified identifier without *"
 	Statement		"statement"
 	StatementList		"statement list"
 	ExplainableStmt		"explainable statement"
@@ -499,6 +501,9 @@ import (
 
 %precedence lowerThanCalcFoundRows
 %precedence calcFoundRows
+
+%precedence lowerThanSetKeyword
+%precedence set
 
 %precedence lowerThanInsertValues
 %precedence insertValues
@@ -657,9 +662,13 @@ Symbol:
 
 /*******************************************************************************************/
 Assignment:
-	ColumnName eq Expression
+	SimpleQualifiedIdent eq Expression
 	{
-		$$ = expressions.Assignment{ColName: $1.(string), Expr: expressions.Expr($3)}
+		x, err := expressions.NewAssignment($1.(string), $3.(expression.Expression))
+		if err != nil {
+			yylex.(*lexer).errf("Parse Assignment error: %s", $1.(string))
+		}
+		$$ = *x
 	}
 
 AssignmentList:
@@ -1708,6 +1717,7 @@ Literal:
 |	floatLit
 |	intLit
 |	stringLit
+|	hexLit
 
 Operand:
 	Literal
@@ -1754,7 +1764,10 @@ Operand:
 		values := append([]expression.Expression{$2.(expression.Expression)}, $4.([]expression.Expression)...)
 		$$ = &expressions.Row{Values: values}
 	}
-
+|	"EXISTS" SubSelect
+	{
+		$$ = &expressions.ExistsSubQuery{Sel: $2.(*expressions.SubQuery)}
+	}
 
 OrderBy:
 	"ORDER" "BY" OrderByList
@@ -2472,6 +2485,17 @@ QualifiedIdent:
 		$$ = fmt.Sprintf("%s.%s.*", $1.(string), $3.(string))
 	}
 
+SimpleQualifiedIdent:
+	Identifier
+|	Identifier '.' Identifier
+	{
+		$$ = fmt.Sprintf("%s.%s", $1.(string), $3.(string))
+	}
+|	Identifier '.' Identifier '.' Identifier
+	{
+		$$ = fmt.Sprintf("%s.%s.%s", $1.(string), $3.(string), $5.(string))
+	}
+
 TableIdent:
 	Identifier
 	{
@@ -2662,7 +2686,7 @@ TableRefs:
 	}
 
 EscapedTableRef:
-	TableRef
+	TableRef %prec lowerThanSetKeyword
 	{
 		$$ = $1
 	}
@@ -3680,20 +3704,25 @@ UnionOpt:
 	}
 
 
-/************************************************************************************/
+/***********************************************************************************
+ * Update Statement
+ * See: https://dev.mysql.com/doc/refman/5.7/en/update.html
+ ***********************************************************************************/
 UpdateStmt:
-	"UPDATE" LowPriorityOptional IgnoreOptional TableIdent SetOpt AssignmentList WhereClauseOptional OrderByOptional LimitClause
+	"UPDATE" LowPriorityOptional IgnoreOptional TableRef "SET" AssignmentList WhereClauseOptional OrderByOptional LimitClause
 	{
+		// Single-table syntax
 		var expr expression.Expression
 		if w := $7; w != nil {
 			expr = w.(*rsets.WhereRset).Expr
 		}
+		r := &rsets.JoinRset{Left: $4, Right: nil}
 		st := &stmts.UpdateStmt{
-			LowPriority:    $2.(bool),
-			TableIdent:     $4.(table.Ident),
-			List:           $6.([]expressions.Assignment), 
-			Where:          expr} 
-	
+			LowPriority:	$2.(bool),
+			TableRefs:	r,
+			List:		$6.([]expressions.Assignment), 
+			Where:		expr,
+		} 
 		if $8 != nil {
 			 st.Order = $8.(*rsets.OrderByRset)
 		}
@@ -3705,7 +3734,25 @@ UpdateStmt:
 			break
 		}
 	}
-
+|	"UPDATE" LowPriorityOptional IgnoreOptional TableRefs "SET" AssignmentList WhereClauseOptional
+	{
+		// Multiple-table syntax
+		var expr expression.Expression
+		if w := $7; w != nil {
+			expr = w.(*rsets.WhereRset).Expr
+		}
+		st := &stmts.UpdateStmt{
+			LowPriority:	$2.(bool),
+			TableRefs:	$4.(*rsets.JoinRset),
+			List:		$6.([]expressions.Assignment), 
+			Where:		expr,
+			MultipleTable:	true,
+		} 
+		$$ = st
+		if yylex.(*lexer).root {
+			break
+		}
+	}
 
 UseStmt:
 	"USE" DBName
@@ -3729,13 +3776,6 @@ WhereClauseOptional:
 |	WhereClause
 	{
 		$$ = $1
-	}
-
-SetOpt:
-	{
-	}
-|	"SET"
-	{
 	}
 
 CommaOpt:

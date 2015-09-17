@@ -153,7 +153,7 @@ func (t *Table) unflatten(rec interface{}, col *column.Col) (interface{}, error)
 	case mysql.TypeNewDecimal, mysql.TypeDecimal:
 		return mysql.ParseDecimal(rec.(string))
 	}
-	log.Error(string(col.Tp), rec, reflect.TypeOf(rec))
+	log.Error(col.Tp, rec, reflect.TypeOf(rec))
 	return nil, nil
 }
 
@@ -328,6 +328,7 @@ func (t *Table) AddRecord(ctx context.Context, r []interface{}) (recordID int64,
 		if err = v.X.Create(txn, colVals, recordID); err != nil {
 			if errors2.ErrorEqual(err, kv.ErrKeyExists) {
 				// Get the duplicate row handle
+				// For insert on duplicate syntax, we should update the row
 				iter, _, terr := v.X.Seek(txn, colVals)
 				if terr != nil {
 					return 0, errors.Trace(terr)
@@ -529,21 +530,21 @@ func (t *Table) IterRecords(ctx context.Context, startKey string, cols []*column
 		// TODO: check valid lock
 		// get row handle
 		var err error
-		h, err := util.DecodeHandleFromRowKey(it.Key())
+		handle, err := util.DecodeHandleFromRowKey(it.Key())
 		if err != nil {
 			return err
 		}
 
-		data, err := t.RowWithCols(ctx, h, cols)
+		data, err := t.RowWithCols(ctx, handle, cols)
 		if err != nil {
 			return err
 		}
-		more, err := fn(h, data, cols)
+		more, err := fn(handle, data, cols)
 		if !more || err != nil {
 			return err
 		}
 
-		rk := t.RecordKey(h, nil)
+		rk := t.RecordKey(handle, nil)
 		it, err = kv.NextUntil(it, util.RowKeyPrefixFilter(rk))
 		if err != nil {
 			return errors.Trace(err)
