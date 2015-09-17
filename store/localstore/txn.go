@@ -40,7 +40,7 @@ type dbTxn struct {
 	kv.UnionStore
 	store        *dbStore // for commit
 	startTs      time.Time
-	tID          int64
+	tID          uint64
 	valid        bool
 	snapshotVals map[string][]byte // origin version in snapshot
 }
@@ -194,8 +194,8 @@ func (txn *dbTxn) doCommit() error {
 	curVer, _ := globalVerProvider.GetCurrentVer()
 	err := txn.each(func(iter iterator.Iterator) error {
 		metaKey := codec.EncodeBytes(nil, iter.Key())
-		// put dummy meta key
-		b.Put(metaKey, nil)
+		// put dummy meta key, write current version
+		b.Put(metaKey, codec.EncodeUint(nil, curVer.Ver))
 		mvccKey := MvccEncodeVersionKey(iter.Key(), curVer)
 		if len(iter.Value()) == 0 { // Deleted marker
 			b.Put(mvccKey, Tombstone)

@@ -141,7 +141,7 @@ func (it *dbIter) Next(fn kv.FnKeyCmp) (kv.Iterator, error) {
 
 		// Get meta key.
 		val, err := it.s.Get(key)
-		if err != nil {
+		if err != nil && err != kv.ErrNotExist {
 			return nil, err
 		}
 		if val != nil {

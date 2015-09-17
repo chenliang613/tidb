@@ -120,9 +120,6 @@ func (t *testMvccSuite) TestMvccPutAndDel(c *C) {
 }
 
 func (t *testMvccSuite) TestMvccNext(c *C) {
-	t.scanRawEngine(c, func(k, v []byte) {
-		log.Warn(k, v)
-	})
 	txn, _ := t.s.Begin()
 	it, err := txn.Seek(encodeInt(2), nil)
 	c.Assert(err, IsNil)
